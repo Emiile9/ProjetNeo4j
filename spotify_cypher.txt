@@ -1,0 +1,286 @@
+// Création des contraintes d'unicité
+
+CREATE CONSTRAINT artist_index_unique IF NOT EXISTS
+FOR (a:Artist)
+REQUIRE a.artist_index IS UNIQUE;
+
+CREATE CONSTRAINT playlist_index_unique IF NOT EXISTS
+FOR (p:Playlist)
+REQUIRE p.playlist_id IS UNIQUE;
+
+CREATE CONSTRAINT track_index_unique IF NOT EXISTS
+FOR (t:Track)
+REQUIRE t.track_id IS UNIQUE;
+
+// import des données
+
+LOAD CSV WITH HEADERS FROM 
+'https://raw.githubusercontent.com/Emiile9/ProjetNeo4j/main/artists.csv'
+AS row
+MERGE (a:Artist {artist_index: toInteger(row.artist_index)})
+SET a.name = row.artist_name;
+
+LOAD CSV WITH HEADERS 
+FROM 'https://raw.githubusercontent.com/Emiile9/ProjetNeo4j/refs/heads/main/playlists.csv' AS row
+MERGE (p:Playlist {playlist_id: row.playlist_id})
+SET p.name = trim(row.playlist_name),
+    p.genre = trim(row.playlist_genre),
+    p.subgenre = trim(row.playlist_subgenre);
+
+LOAD CSV WITH HEADERS
+FROM 'https://raw.githubusercontent.com/Emiile9/ProjetNeo4j/refs/heads/main/tracks.csv' AS row
+
+WITH apoc.map.clean(row, [''], ['']) AS cleanRow
+
+MERGE (t:Track {track_id: cleanRow.track_id})
+SET 
+    t += cleanRow,
+
+    // conversions numériques
+    t.energy = toFloat(cleanRow.energy),
+    t.tempo = toFloat(cleanRow.tempo),
+    t.danceability = toFloat(cleanRow.danceability),
+    t.loudness = toFloat(cleanRow.loudness),
+    t.liveness = toFloat(cleanRow.liveness),
+    t.valence = toFloat(cleanRow.valence),
+    t.speechiness = toFloat(cleanRow.speechiness),
+    t.instrumentalness = toFloat(cleanRow.instrumentalness),
+    t.track_popularity = toInteger(cleanRow.track_popularity),
+    t.time_signature = toInteger(cleanRow.time_signature),
+    t.mode = toInteger(cleanRow.mode),
+    t.key = toInteger(cleanRow.key),
+    t.duration_ms = toInteger(cleanRow.duration_ms);
+// Création des relations playlist -> contient -> titre / artiste -> chante -> titre
+
+LOAD CSV WITH HEADERS 
+FROM 'https://raw.githubusercontent.com/Emiile9/ProjetNeo4j/refs/heads/main/tracks.csv' AS row
+WITH row, split(row.track_artist, ',') AS artists
+UNWIND artists AS artist_name
+MATCH (a:Artist {name: trim(artist_name)})
+MATCH (t:Track {track_id: row.track_id})
+MERGE (a)-[:SINGS]->(t);
+
+
+LOAD CSV WITH HEADERS 
+FROM 'https://raw.githubusercontent.com/Emiile9/ProjetNeo4j/refs/heads/main/tracks.csv' AS row
+MATCH (p:Playlist {playlist_id: row.playlist_id})
+MATCH (t:Track {track_id: row.track_id})
+MERGE (p)-[:CONTAINS]->(t);
+
+// Création d'une nouvelle playlist "Nouvel An"
+
+CREATE (p:Playlist {name: "Nouvel An", playlist_id: "0WHSUDr9DMD89LvRgj8kYk"})
+
+// Voir l'ensemble des playlists et des titres qu'elles contiennent
+
+MATCH (n:Playlist)-[c:CONTAINS]->(t:Track) RETURN n,c,t;
+
+// Trouver et ajouter tous les morceaux de Travis Scott
+
+MATCH (Travis:Artist)-[s:SINGS]->(songs)
+WHERE Travis.name = 'Travis Scott'
+RETURN Travis, s, songs
+
+MATCH (p:Playlist {name: 'Nouvel An'})
+MATCH (a:Artist {name: 'Travis Scott'})-[:SINGS]->(t:Track)
+MERGE (p)-[:CONTAINS]->(t);
+
+// Trouver les 15 morceaux les plus populaires
+
+MATCH (t:Track) // trouve tous les titres
+WHERE t.track_popularity IS NOT NULL
+RETURN t.track_name AS track,
+       t.track_popularity AS popularity
+ORDER BY popularity DESC // tri par popularité décroissante
+LIMIT 15; // prend les 15 premiers résultats
+
+// Ajouter tous les titres de la playlist la plus "danceable"
+
+MATCH (p:Playlist)-[:CONTAINS]->(t:Track) // trouve les playlists et leurs titres
+WHERE t.danceability IS NOT NULL
+RETURN 
+  p.name AS playlist,
+  round(avg(t.danceability), 3) AS avg_danceability // calcule la danceability moyenne et arrondit à 3 décimales
+ORDER BY avg_danceability DESC
+LIMIT 1; // tri et prend la plus haute
+
+
+// Trouver les artistes apparaissant dans le plus de playlists
+
+MATCH (a:Artist)-[:SINGS]->(t:Track)<-[:CONTAINS]-(p:Playlist) // pour chaque artiste, trouve les titres qu'il chante et les playlists contenant ces titres
+WITH a, COUNT(DISTINCT p) AS nb_playlists // compte le nombre distinct de playlists par artiste
+WHERE nb_playlists > 0
+RETURN a.name AS artist, nb_playlists
+ORDER BY nb_playlists DESC // trie par nombre de playlists décroissant
+LIMIT 3;
+
+// Trouver les artistes avec en moyenne les titres les plus populaires
+
+MATCH (a:Artist) - [:SINGS] -> (t:Track)
+WHERE t.track_popularity IS NOT NULL
+RETURN a.name as Artist, 
+      avg(t.track_popularity) as Popularité_moyenne // calcule la popularité moyenne des titres par artiste
+ORDER BY Popularité_moyenne DESC // trie par popularité moyenne décroissante
+LIMIT 5
+
+// Trouver la playlist la plus longue qui est assez populaire et dansante
+
+MATCH (p:Playlist)-[:CONTAINS]->(t:Track)
+WITH p, // calcule les agregats des métriques des titres par playlist
+     avg(t.danceability) AS avg_dance, 
+     avg(t.track_popularity) AS avg_pop, 
+     sum(t.duration_ms) AS full_length
+WHERE avg_dance > 0.7 AND avg_pop > 70 // filtre selon les seuils
+RETURN p.name AS playlist, avg_dance, avg_pop, full_length
+ORDER BY full_length DESC // trie par durée totale décroissante
+LIMIT 5;
+
+
+// Trouver le plus court chemin entre deux artistes
+
+MATCH path = (drake:Artist {name: 'Drake'})-[:SINGS*1..5]-(travis:Artist {name: 'Travis Scott'}) // cherche les chemins entre Drake et Travis Scott avec 1 à 5 relations SINGS
+RETURN nodes(path) AS nodes, relationships(path) AS rels, length(path) AS nb_steps // retourne les nœuds, les relations et la longueur du chemin
+LIMIT 1;
+
+
+// SCENARIO 2
+
+// Trouver tous les titres de Bad Bunny
+
+MATCH (a:Artist)-[s:SINGS]->(t:Track) 
+WHERE a.name = 'Bad Bunny' // filtre pour Bad Bunny
+RETURN a, s, t
+
+// Trouver toutes les playlists contenant des titres de Bad Bunny
+
+MATCH (a:Artist)-[s:SINGS]->(t:Track)<-[c:CONTAINS]-(p:Playlist)
+WHERE a.name = 'Bad Bunny'
+RETURN p
+
+// Trouver les artistes avec qui Bad Bunny a collaboré
+
+MATCH (a:Artist)-[s1:SINGS]->(t:Track)<-[s2:SINGS]-(a2:Artist) // trouve les artistes ayant chanté les mêmes titres que Bad Bunny
+WHERE a.name = 'Bad Bunny' 
+RETURN t.track_name,a2.name
+
+// Supprimer 15 secondes du morceau 'FINA' (pb de droits d'auteur)
+
+MATCH (t:Track)
+WHERE t.track_name = 'FINA'
+SET t.duration_ms = t.duration_ms - 15000 // moins 15000 ms (15 secondes) pour le morceau 'FINA'
+
+// Suppression définitive du morceau 'FINA'
+
+MATCH (t:Track {track_name: "FINA"})
+DETACH DELETE t; // supprime le nœud et toutes ses relations
+
+// Sortie d'un nouveau morceau 
+
+CREATE (t:Track {
+    track_name: "BAD CON NICKY",
+    duration_ms: 180000,        
+    track_popularity: 85        
+}); // crée un nouveau nœud Track pour le nouveau morceau
+
+MATCH (t:Track {track_name: "BAD CON NICKY"}), // lie le nouveau morceau aux artistes Bad Bunny et Nicky Jam
+      (bad:Artist {name: "Bad Bunny"}),
+      (nicky:Artist {name: "Nicky Jam"})
+MERGE (bad)-[:SINGS]->(t)
+MERGE (nicky)-[:SINGS]->(t);
+
+
+// GDS
+
+// Projection du graph 
+
+CALL gds.graph.project(
+  'spotify-graph',
+  {
+    Artist: {},
+    Track: {},
+    Playlist: {}
+  },
+  {
+    SINGS: {
+      type: 'SINGS',
+      orientation: 'UNDIRECTED'
+    },
+    CONTAINS: {
+      type: 'CONTAINS',
+      orientation: 'UNDIRECTED'
+    }
+  }
+);
+
+
+// Statistiques nombre de chansons par artiste
+
+CALL gds.degree.stream('spotify-graph')
+YIELD nodeId, score
+WITH gds.util.asNode(nodeId) AS node, score
+WHERE node:Artist
+RETURN 
+  avg(score) AS degre_moyen,
+  min(score) AS degre_min,
+  max(score) AS degre_max;
+
+// Statistiques nombre de chansons par playlist
+
+CALL gds.degree.stream('spotify-graph')
+YIELD nodeId, score
+WITH gds.util.asNode(nodeId) AS node, score
+WHERE node:Playlist
+RETURN 
+  avg(score) AS degre_moyen,
+  min(score) AS degre_min,
+  max(score) AS degre_max;
+
+
+// Pagerank des artistes
+
+CALL gds.pageRank.stream('spotify-graph')
+YIELD nodeId, score
+WITH gds.util.asNode(nodeId) AS node, score
+WHERE node:Artist
+RETURN 
+  node.name AS artist,
+  score AS pagerank
+ORDER BY pagerank DESC
+LIMIT 10;
+
+// Betweenness des artistes
+
+CALL gds.betweenness.stream('spotify-graph')
+YIELD nodeId, score
+WITH gds.util.asNode(nodeId) AS node, score
+WHERE node:Artist
+RETURN 
+  node.name AS artist,
+  score AS betweenness
+ORDER BY betweenness DESC
+LIMIT 10;
+
+
+// LPA 
+
+CALL gds.labelPropagation.stream('spotify-graph')
+YIELD nodeId, communityId
+WITH gds.util.asNode(nodeId) AS node, communityId
+WHERE node:Artist
+RETURN 
+  communityId,
+  collect(node.name) AS artistes,
+  size(collect(node)) AS taille_communaute
+ORDER BY taille_communaute DESC
+LIMIT 5;
+
+// WCC 
+
+CALL gds.wcc.stream('spotify-graph')
+YIELD nodeId, componentId
+WITH gds.util.asNode(nodeId) AS node, componentId
+RETURN 
+  componentId,
+  collect(node.name) AS elements,
+  size(collect(node)) AS taille_composante
+ORDER BY taille_composante DESC;
